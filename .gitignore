@@ -1,0 +1,41 @@
+# 🧠 Carpetas de APIs locales o generadas
+.langgraph_api/
+.api/
+__pycache__/
+.qodo/
+.cache/
+logs/
+data/
+
+# 🐍 Entornos virtuales
+.venv/
+env/
+venv/
+
+# ⚙️ Archivos de configuración o credenciales
+.env
+*.env
+
+# 🧩 Archivos compilados de Python
+*.pyc
+*.pyo
+*.pyd
+
+# 📁 Configuración de IDEs
+.vscode/
+.idea/
+
+# 🧰 Archivos de sistema o temporales
+*.log
+*.tmp
+.DS_Store
+Thumbs.db
+
+# 🚫 Archivos de dependencias o build
+dist/
+build/
+*.egg-info/
+
+
+.langgraph_api
+.langgraph_cache
