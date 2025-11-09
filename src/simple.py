@@ -8,12 +8,14 @@ class State(MessagesState):
     my_age: int
 
 def node_1(state: State):
+    history= state["messages"]
+    
     if state.get("customer_name") is None:
         return {
             "customer_name": "John Doe"
         }
     else:
-        ai_msg = AIMessage(content="Hello, how can I help you today?")
+        ai_msg = AIMessage(content="Hola, cómo puedo ayudarte?")
         return {
             "messages": [ai_msg]
         }
