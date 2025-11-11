@@ -1,6 +1,9 @@
 from langgraph.graph import StateGraph, START, END, MessagesState
 from langchain_core.messages import AIMessage
+from langchain.chat_models import init_chat_model
+import  random
 
+llm= init_chat_model("groq:llama-3.1-8b-instant", temperature=1)
 
 # Definición del estado (estructura de datos)
 class State(MessagesState):
@@ -8,17 +11,17 @@ class State(MessagesState):
     my_age: int
 
 def node_1(state: State):
-    history= state["messages"]
-    
+    new_state: State={}
     if state.get("customer_name") is None:
-        return {
-            "customer_name": "John Doe"
-        }
+        new_state["customer_name"] = "Oskar"
     else:
-        ai_msg = AIMessage(content="Hola, cómo puedo ayudarte?")
-        return {
-            "messages": [ai_msg]
-        }
+        new_state["age"] =random.randint(20, 30)
+
+    history= state["messages"]
+    ai_message= llm.invoke(history)
+    new_state["messages"]=[ai_message]
+    return new_state
+
 
 from langgraph.graph import StateGraph, START, END
 
