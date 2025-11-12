@@ -1,7 +1,7 @@
-from langgraph.graph import StateGraph, START, END, MessagesState
-from langchain_core.messages import AIMessage, SystemMessage, HumanMessage
+from langgraph.graph import StateGraph, START, END
+from langchain_core.messages import AIMessage, SystemMessage, HumanMessage, BaseMessage
 from langchain.chat_models import init_chat_model
-from typing import Literal
+from typing import Literal, TypedDict, List, Dict, Any
 import psycopg2
 import os
 from dotenv import load_dotenv
@@ -20,8 +20,11 @@ DB_CONFIG = {
     "sslmode": "require"
 }
 
-# Definición del estado
-class State(MessagesState):
+# Definición del estado para LangGraph
+class MessagesState(TypedDict):
+    messages: List[BaseMessage]
+
+class State(MessagesState, total=False):
     user_role: Literal["usuario", "cliente", "empleado", "administrador"]
     user_id: int
     access_granted: bool
@@ -32,7 +35,7 @@ def get_db_connection():
 
 def check_user_access(state: State):
     """Verifica el rol del usuario y determina sus permisos"""
-    new_state = {}
+    new_state: Dict[str, Any] = {}
     
     user_role = state.get("user_role", "usuario")
     user_id = state.get("user_id")
@@ -71,7 +74,7 @@ def check_user_access(state: State):
 
 def process_query(state: State):
     """Procesa la consulta del usuario con LLM"""
-    new_state = {}
+    new_state: Dict[str, Any] = {}
     
     if not state.get("access_granted", False):
         # Si no hay acceso, responder con mensaje de error
@@ -112,23 +115,20 @@ def should_continue(state: State) -> Literal["process", "end"]:
         return "process"
     return "end"
 
-# Construcción del grafo
-builder = StateGraph(State)
-
-# Agregar nodos
-builder.add_node("check_access", check_user_access)
-builder.add_node("process_query", process_query)
-
-# Definir flujo
-builder.add_edge(START, "check_access")
-builder.add_conditional_edges(
+# Construcción del grafo LangGraph para 'langgraph dev'
+_builder = StateGraph(State)
+_builder.add_node("check_access", check_user_access)
+_builder.add_node("process_query", process_query)
+_builder.add_edge(START, "check_access")
+_builder.add_conditional_edges(
     "check_access",
     should_continue,
     {
         "process": "process_query",
-        "end": END
-    }
+        "end": END,
+    },
 )
-builder.add_edge("process_query", END)
+_builder.add_edge("process_query", END)
 
-agent = builder.compile()
+# Este es el objeto que 'langgraph dev' espera encontrar
+agent = _builder.compile()
