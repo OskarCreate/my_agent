@@ -1,7 +1,7 @@
 from langgraph.graph import StateGraph, START, END, MessagesState
 from langchain_core.messages import AIMessage, SystemMessage, HumanMessage, BaseMessage, trim_messages
 from langchain.chat_models import init_chat_model
-from typing import Literal, TypedDict, List, Dict, Any, Annotated
+from typing import Literal, TypedDict, List, Dict, Any, Annotated, Optional
 import os
 from dotenv import load_dotenv
 from langgraph.checkpoint.memory import MemorySaver
@@ -11,81 +11,154 @@ load_dotenv()
 # Modelo LLM
 llm = init_chat_model("llama-3.1-8b-instant", model_provider="groq", temperature=0.7)
 
-# Datos estáticos de viajes (sin base de datos)
-VIAJES_CATALOGO = [
+# Catálogo de viajes (dinámico). Puedes alimentarlo desde tu página.
+# Opciones de fuente (por variables de entorno):
+# - VIAJES_JSON_PATH: ruta a un JSON local con la lista de viajes
+# - VIAJES_API_URL: URL HTTP que devuelve JSON con la lista de viajes
+# Si no se proporcionan, se usa un catálogo de ejemplo.
+import json
+from pathlib import Path
+
+try:
+    import requests  # para cargar desde API si se configura VIAJES_API_URL
+except Exception:
+    requests = None
+
+# Overrides configurables en tiempo de ejecución (vía API)
+OVERRIDE_JSON_PATH: Optional[str] = None
+OVERRIDE_API_URL: Optional[str] = None
+
+# URL por defecto (tu web local)
+DEFAULT_VIAJES_API_URL = "http://localhost:3000/api/viajes"
+
+# Rutas locales candidatas para data en el repo (se usa la primera que exista)
+LOCAL_JSON_CANDIDATES = [
+    Path(__file__).resolve().with_name("viajes.json"),
+    Path(__file__).resolve().parents[1] / "data" / "viajes.json",
+]
+
+DEFAULT_VIAJES = [
     {
         "id": 1,
-        "destino": "Cancún, México",
-        "descripcion": "Playas paradisíacas con todo incluido. Hotel 5 estrellas frente al mar.",
-        "precio": 1299.99,
-        "fecha_salida": "2025-12-15",
-        "fecha_regreso": "2025-12-22",
-        "cupos_disponibles": 20
+        "destino": "Cusco - Machu Picchu, Perú",
+        "descripcion": "City tour + Valle Sagrado + Machu Picchu.",
+        "precio": 750.00,
+        "fecha_salida": "",
+        "fecha_regreso": "",
+        "cupos_disponibles": 20,
     },
     {
         "id": 2,
-        "destino": "París, Francia",
-        "descripcion": "Tour romántico por la ciudad del amor. Incluye Torre Eiffel y Louvre.",
-        "precio": 2499.99,
-        "fecha_salida": "2025-11-20",
-        "fecha_regreso": "2025-11-27",
-        "cupos_disponibles": 15
+        "destino": "Arequipa, Perú",
+        "descripcion": "Ciudad Blanca y Cañón del Colca.",
+        "precio": 320.00,
+        "fecha_salida": "",
+        "fecha_regreso": "",
+        "cupos_disponibles": 18,
     },
     {
         "id": 3,
-        "destino": "Machu Picchu, Perú",
-        "descripcion": "Aventura histórica en las ruinas incas. Incluye guía y transporte.",
-        "precio": 1899.99,
-        "fecha_salida": "2026-01-10",
-        "fecha_regreso": "2026-01-17",
-        "cupos_disponibles": 12
+        "destino": "Iquitos (Amazonas), Perú",
+        "descripcion": "Selva amazónica y lodge ecológico.",
+        "precio": 450.00,
+        "fecha_salida": "",
+        "fecha_regreso": "",
+        "cupos_disponibles": 15,
     },
     {
         "id": 4,
-        "destino": "Tokyo, Japón",
-        "descripcion": "Experiencia cultural única. Templos, tecnología y gastronomía.",
-        "precio": 3299.99,
-        "fecha_salida": "2026-02-05",
-        "fecha_regreso": "2026-02-15",
-        "cupos_disponibles": 10
+        "destino": "Puno - Lago Titicaca, Perú",
+        "descripcion": "Islas Uros y Taquile.",
+        "precio": 280.00,
+        "fecha_salida": "",
+        "fecha_regreso": "",
+        "cupos_disponibles": 25,
     },
-    {
-        "id": 5,
-        "destino": "Cartagena, Colombia",
-        "descripcion": "Ciudad amurallada y playas caribeñas. Historia y diversión.",
-        "precio": 899.99,
-        "fecha_salida": "2025-12-01",
-        "fecha_regreso": "2025-12-08",
-        "cupos_disponibles": 25
-    },
-    {
-        "id": 6,
-        "destino": "Nueva York, USA",
-        "descripcion": "La Gran Manzana te espera. Broadway, museos y Times Square.",
-        "precio": 1799.99,
-        "fecha_salida": "2025-11-25",
-        "fecha_regreso": "2025-12-02",
-        "cupos_disponibles": 18
-    },
-    {
-        "id": 7,
-        "destino": "Barcelona, España",
-        "descripcion": "Arte, arquitectura y playa mediterránea. Sagrada Familia y más.",
-        "precio": 2199.99,
-        "fecha_salida": "2026-03-15",
-        "fecha_regreso": "2026-03-22",
-        "cupos_disponibles": 14
-    },
-    {
-        "id": 8,
-        "destino": "Río de Janeiro, Brasil",
-        "descripcion": "Carnaval, playas y el Cristo Redentor. Pura alegría.",
-        "precio": 1599.99,
-        "fecha_salida": "2026-02-20",
-        "fecha_regreso": "2026-02-27",
-        "cupos_disponibles": 22
-    }
 ]
+
+def _normalize_viaje(item: Dict[str, Any]) -> Dict[str, Any]:
+    """Normaliza claves comunes provenientes de tu página/API al formato interno.
+    Ajusta aquí si tus nombres de campo difieren.
+    """
+    def pick(*keys, default=None):
+        for k in keys:
+            if k in item and item[k] not in (None, ""):
+                return item[k]
+        return default
+
+    return {
+        "id": pick("id", "ID", "codigo", default=None),
+        "destino": pick("destino", "nombre", "titulo", "title", default=""),
+        "descripcion": pick("descripcion", "descripcion_corta", "descripcion_larga", "description", default=""),
+        "precio": float(pick("precio", "precio_soles", "price", default=0) or 0),
+        "fecha_salida": pick("fecha_salida", "salida", "desde", "start_date", default=""),
+        "fecha_regreso": pick("fecha_regreso", "regreso", "hasta", "end_date", default=""),
+        "cupos_disponibles": int(pick("cupos_disponibles", "cupos", "stock", "seats", default=0) or 0),
+    }
+
+def _load_from_json(path: str) -> List[Dict[str, Any]]:
+    p = Path(path)
+    if not p.exists():
+        return []
+    data = json.loads(p.read_text(encoding="utf-8"))
+    if isinstance(data, dict) and "items" in data:
+        data = data["items"]
+    return [_normalize_viaje(d) for d in data]
+
+def _load_from_api(url: str) -> List[Dict[str, Any]]:
+    if not requests:
+        return []
+    try:
+        r = requests.get(url, timeout=4)
+        r.raise_for_status()
+        data = r.json()
+        if isinstance(data, dict) and "items" in data:
+            data = data["items"]
+        return [_normalize_viaje(d) for d in data]
+    except Exception:
+        return []
+
+def _load_viajes_catalogo() -> List[Dict[str, Any]]:
+    # 1) Overrides establecidos en tiempo de ejecución
+    if OVERRIDE_JSON_PATH:
+        items = _load_from_json(OVERRIDE_JSON_PATH)
+        if items:
+            return items
+    if OVERRIDE_API_URL:
+        items = _load_from_api(OVERRIDE_API_URL)
+        if items:
+            return items
+
+    # 2) Variables de entorno
+    json_path = os.getenv("VIAJES_JSON_PATH")
+    api_url = os.getenv("VIAJES_API_URL")
+    if json_path:
+        items = _load_from_json(json_path)
+        if items:
+            return items
+    if api_url:
+        items = _load_from_api(api_url)
+        if items:
+            return items
+
+    # 3) Archivo local del repo (data/viajes.json o src/viajes.json)
+    for candidate in LOCAL_JSON_CANDIDATES:
+        try:
+            items = _load_from_json(str(candidate))
+            if items:
+                return items
+        except Exception:
+            pass
+
+    # 4) URL por defecto de tu web local (si está corriendo)
+    items = _load_from_api(DEFAULT_VIAJES_API_URL)
+    if items:
+        return items
+
+    # 5) Fallback de ejemplo
+    return DEFAULT_VIAJES
+
+VIAJES_CATALOGO = _load_viajes_catalogo()
 
 # Almacenamiento temporal de reservaciones (en memoria)
 RESERVACIONES = {}
@@ -96,6 +169,26 @@ RESERVACION_COUNTER = 1
 def obtener_viajes() -> List[Dict[str, Any]]:
     """Devuelve el catálogo de viajes."""
     return VIAJES_CATALOGO
+
+def recargar_viajes_catalogo() -> int:
+    """Recarga el catálogo desde la fuente configurada. Retorna el total de viajes."""
+    global VIAJES_CATALOGO
+    VIAJES_CATALOGO = _load_viajes_catalogo()
+    return len(VIAJES_CATALOGO)
+
+def set_viajes_source(*, json_path: Optional[str] = None, api_url: Optional[str] = None) -> Dict[str, Optional[str]]:
+    """Define la fuente del catálogo en tiempo de ejecución y recarga."""
+    global OVERRIDE_JSON_PATH, OVERRIDE_API_URL
+    OVERRIDE_JSON_PATH = json_path or None
+    OVERRIDE_API_URL = api_url or None
+    recargar_viajes_catalogo()
+    return {"json_path": OVERRIDE_JSON_PATH, "api_url": OVERRIDE_API_URL}
+
+def set_viajes_catalogo(items: List[Dict[str, Any]]) -> int:
+    """Sobrescribe el catálogo actual con items ya normalizados o crudos."""
+    global VIAJES_CATALOGO
+    VIAJES_CATALOGO = [_normalize_viaje(it) for it in (items or [])]
+    return len(VIAJES_CATALOGO)
 
 def crear_reservacion_mock(user_id: str, viaje_id: int, num_personas: int = 1) -> Dict[str, Any]:
     """Crea una reservación simulada en memoria."""
@@ -163,7 +256,7 @@ def chatbot(state: MessagesState):
     - Sé amigable, cálido y cercano
     - Usa emojis cuando sea apropiado
     - Recuerda el contexto de la conversación
-    - Si no sabes algo, adí telo honestamente
+    - Si no sabes algo, dilo honestamente
     - Ayuda con cualquier consulta, no solo viajes
     - Mantén un tono conversacional natural
     """)
@@ -183,10 +276,8 @@ builder.add_node("chatbot", chatbot)
 builder.add_edge(START, "chatbot")
 builder.add_edge("chatbot", END)
 
-# Compilar el grafo
-# Nota: LangGraph Studio maneja la persistencia automáticamente,
-# por lo que NO usamos checkpointer aquí para compatibilidad.
-# Para uso local con memoria, ver test_galleta.py que usa MemorySaver
-agent = builder.compile()
+# Compilar el grafo con memoria persistente por hilo (thread_id)
+checkpointer = MemorySaver()
+agent = builder.compile(checkpointer=checkpointer)
 agent.name = "Galleta"
 
