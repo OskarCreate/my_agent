@@ -6,7 +6,7 @@ from starlette.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Literal, Optional
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
-from src.simple import agent  # tu agente compilado
+from src.main import agent  # tu agente compilado (Galleta)
 
 AGENT_API_KEY = os.getenv("AGENT_API_KEY")
 
