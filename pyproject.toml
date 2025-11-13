@@ -5,14 +5,16 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "google-generativeai>=0.8.0",
     "langchain>=1.0.4",
     "langchain-google-genai>=3.0.0",
     "langchain-groq>=1.0.0",
     "langchain-openai>=1.0.2",
     "langgraph>=1.0.2",
     "langgraph-cli[inmem]>=0.4.7",
+    "psycopg2-binary>=2.9.0",
     "python-dotenv>=1.2.1",
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
 ]
 
 [dependency-groups]
