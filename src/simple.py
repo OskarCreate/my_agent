@@ -42,6 +42,8 @@ class MessagesState(TypedDict):
 class State(MessagesState, total=False):
     user_role: Literal["usuario", "cliente", "empleado", "administrador"]
     user_id: int
+    user_name: str
+    style: Literal["technical", "non_technical"]
     access_granted: bool
 
 def _parse_dotnet_pg_connstr(conn: str) -> Dict[str, Any]:
@@ -350,42 +352,58 @@ def get_db_overview(max_tables: int | None = None) -> str:
 
 
 def check_user_access(state: State):
-    """Verifica el rol del usuario y determina sus permisos"""
+    """Verifica el rol del usuario, determina permisos y la forma de hablar (técnica vs no técnica)."""
     new_state: Dict[str, Any] = {}
-    
+
     user_role = state.get("user_role", "usuario")
     user_id = state.get("user_id")
-    
-    # Empleados y administradores tienen acceso completo
-    if user_role in ["empleado", "administrador"]:
+    user_name = state.get("user_name")
+
+    # Por defecto evitamos tecnicismos salvo en administrador
+    if user_role == "administrador":
         new_state["access_granted"] = True
+        new_state["style"] = "technical"
         system_msg = SystemMessage(content=(
-            f"Eres un asistente con rol de {user_role}. "
-            "Tienes acceso completo a toda la información de la base de datos. "
-            "Puedes consultar y modificar cualquier registro."
+            "Eres un asistente para un administrador. Puedes incluir detalles técnicos (tablas, esquemas, índices, SQL) cuando sea útil. "
+            "Mantén precisión y justifica brevemente los pasos cuando agregue valor."
         ))
-    # Usuarios y clientes solo acceden a su propia información
+    elif user_role == "empleado":
+        new_state["access_granted"] = True
+        new_state["style"] = "non_technical"
+        system_msg = SystemMessage(content=(
+            "Eres un asistente para un empleado. Evita jerga técnica (SQL, tablas, esquemas, índices). "
+            "Explica en lenguaje sencillo, orientado al negocio. Si el usuario pide detalles técnicos de forma explícita, confirma primero."
+        ))
     elif user_role in ["usuario", "cliente"]:
         if user_id:
             new_state["access_granted"] = True
+            new_state["style"] = "non_technical"
             system_msg = SystemMessage(content=(
-                f"Eres un asistente con rol de {user_role}. "
-                f"Solo puedes acceder a la información del usuario con ID {user_id}. "
-                "No puedes consultar ni modificar información de otros usuarios."
+                f"Asistes a un {user_role}. Solo puedes acceder a la información del usuario con ID {user_id}. "
+                "Responde sin tecnicismos y con foco en utilidad práctica."
             ))
         else:
             new_state["access_granted"] = False
+            new_state["style"] = "non_technical"
             system_msg = SystemMessage(content=(
                 "Acceso denegado. No se proporcionó un ID de usuario válido."
             ))
     else:
         new_state["access_granted"] = False
+        new_state["style"] = "non_technical"
         system_msg = SystemMessage(content="Rol de usuario no reconocido.")
-    
-    # Agregar mensaje del sistema al historial
-    messages = [system_msg] + state.get("messages", [])
+
+    # Mensajes de sistema adicionales: coherencia e identidad del usuario
+    sys_msgs = [system_msg]
+    if user_name:
+        sys_msgs.append(SystemMessage(content=(
+            f"El usuario se llama {user_name}. Dirígete a él por su nombre cuando sea natural y mantén consistencia."
+        )))
+
+    # Agregar mensajes del sistema al inicio del historial existente
+    messages = sys_msgs + state.get("messages", [])
     new_state["messages"] = messages
-    
+
     return new_state
 
 # ------------------ NODOS DESGLOSADOS ------------------
@@ -455,8 +473,8 @@ def execute_db_actions(state: State):
     user_role = state.get("user_role")
     user_text = get_last_user_message(state)
 
-    # Restringir acciones globales para roles limitados
-    if user_role not in ("empleado", "administrador"):
+    # Restringir acciones globales para roles: solo administrador puede ver metadatos globales
+    if user_role != "administrador":
         if any(a.get("type") in ("count_tables", "list_tables", "overview") for a in plan.get("actions", [])):
             return {"messages": [AIMessage(content="❌ No tienes permisos para consultar metadatos globales de BD.")]}
 
@@ -546,11 +564,23 @@ def finalize_with_groq(state: State):
         overview_text = next((r.get("result") for r in db_results if r.get("action") == "overview"), reasoned or "")
         return {"messages": [AIMessage(content=overview_text)]}
 
+    # Adaptar el tono final según el estilo y el nombre del usuario
+    style = state.get("style", "non_technical")
+    user_name = state.get("user_name")
+
+    sys_instruction = "Orquestador - respuesta final"
+    if style == "non_technical":
+        sys_instruction += ": Redacta sin tecnicismos (no mencionar SQL, tablas, esquemas, índices). Enfoca en impacto práctico y pasos claros."
+    if user_name:
+        sys_instruction += f" Personaliza el saludo usando el nombre {user_name} cuando sea natural."
+
     groq_final = llm_groq.invoke([
-        SystemMessage(content="Orquestador - respuesta final"),
+        SystemMessage(content=sys_instruction),
         HumanMessage(content=json.dumps({
             "user": user_text,
             "role": user_role,
+            "style": style,
+            "user_name": user_name,
             "plan": plan,
             "db_results": db_results,
             "reasoned_answer": reasoned,
