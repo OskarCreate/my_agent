@@ -101,6 +101,11 @@ def admin_set_catalog(req: SetCatalogRequest):
 
 @app.post("/chat", response_model=ChatResponse)
 def chat(req: ChatRequest):
+    """Endpoint principal de chat (POST /chat).
+
+    Se encarga de construir el estado, invocar al agente y devolver SIEMPRE
+    un string en `reply`, incluso si el agente devuelve un formato inesperado.
+    """
     # Construye historial y estado para el agente
     history = to_lc_messages(req.history or [])
     state = {
@@ -109,9 +114,43 @@ def chat(req: ChatRequest):
         "user_id": req.user_id,
         "user_name": req.user_name,
     }
+
     # Determinar thread_id (si no viene, usa user_id o 'default')
     thread_id = req.thread_id or (str(req.user_id) if req.user_id is not None else "default")
-    # Invocar con memoria por hilo
-    result = agent.invoke(state, config={"configurable": {"thread_id": thread_id}})
-    ai_msg = result.get("messages", [])[-1].content if result.get("messages") else ""
-    return ChatResponse(reply=ai_msg)
+
+    # Invocar al agente con memoria por hilo y extraer de forma robusta el último mensaje
+    try:
+        result = agent.invoke(state, config={"configurable": {"thread_id": thread_id}})
+    except Exception as e:
+        # En caso de error de runtime, devolvemos un mensaje claro en lugar de romper la API
+        return ChatResponse(reply=f"Ocurrió un error al invocar al agente: {e}")
+
+    # `result` normalmente es un dict con clave "messages", pero soportamos también lista directa
+    messages = None
+    if isinstance(result, dict):
+        messages = result.get("messages")
+    elif isinstance(result, list):
+        messages = result
+
+    reply_text = ""
+    if isinstance(messages, list) and messages:
+        last = messages[-1]
+        # Soportar objetos de mensaje de LangChain o estructuras dict sencillas
+        if hasattr(last, "content"):
+            reply_text = getattr(last, "content", "") or ""
+        elif isinstance(last, dict) and "content" in last:
+            reply_text = str(last.get("content") or "")
+        else:
+            reply_text = str(last)
+
+    # Si por alguna razón el modelo no devuelve contenido, devolvemos un texto claro
+    if not reply_text:
+        reply_text = "No pude generar una respuesta. Revisa que la API key de Groq sea correcta y que el modelo esté disponible."
+
+    return ChatResponse(reply=reply_text)
+
+
+# Alias compatible con /api/chat (por si tu frontend llama a esa ruta)
+@app.post("/api/chat", response_model=ChatResponse)
+def chat_api(req: ChatRequest):
+    return chat(req)

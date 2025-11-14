@@ -96,7 +96,24 @@ def to_lc_messages(turns: List[ChatTurn]):
     return out
 
 @app.post("/api/chat")
+def chat_api(req: ChatRequest, authorization: Optional[str] = Header(None)):
+    """Endpoint principal para integraciones tipo API (por ejemplo, .NET).
+
+    Acepta POST /api/chat y delega la lógica de negocio a una función común.
+    """
+    return _handle_chat(req, authorization)
+
+
+@app.post("/chat")
 def chat(req: ChatRequest, authorization: Optional[str] = Header(None)):
+    """Alias en POST /chat para evitar errores de ruta.
+
+    Esto permite que tanto /chat como /api/chat funcionen contra el mismo agente.
+    """
+    return _handle_chat(req, authorization)
+
+
+def _handle_chat(req: ChatRequest, authorization: Optional[str]):
     # Protección simple por token (opcional pero recomendable)
     if AGENT_API_KEY:
         if not authorization or not authorization.startswith("Bearer "):
@@ -120,7 +137,14 @@ def chat(req: ChatRequest, authorization: Optional[str] = Header(None)):
     # Agregar una instrucción de sistema con el nombre recordado, si está
     sys_msgs: List[ChatTurn] = []
     if profile.get("name"):
-        sys_msgs.append(ChatTurn(role="system", content=f"El usuario se llama {profile['name']}. Dirígete a él por su nombre cuando sea natural."))
+        sys_msgs.append(
+            ChatTurn(
+                role="system",
+                content=(
+                    f"El usuario se llama {profile['name']}. Dirígete a él por su nombre cuando sea natural."
+                ),
+            )
+        )
 
     # Construir historial LC + mensaje actual
     history = to_lc_messages(sys_msgs + base_history)
@@ -130,12 +154,35 @@ def chat(req: ChatRequest, authorization: Optional[str] = Header(None)):
         "user_id": req.user_id,
         "user_name": profile.get("name"),
     }
-    result = agent.invoke(state)
-    ai_msg = result.get("messages", [])[-1].content if result.get("messages") else ""
+
+    try:
+        result = agent.invoke(state)
+    except Exception as e:
+        # En caso de error al invocar el agente, devolvemos un mensaje claro
+        return {"reply": f"Ocurrió un error al invocar al agente: {e}", "remembered_name": profile.get("name")}
+
+    messages = None
+    if isinstance(result, dict):
+        messages = result.get("messages")
+    elif isinstance(result, list):
+        messages = result
+
+    ai_msg = ""
+    if isinstance(messages, list) and messages:
+        last = messages[-1]
+        if hasattr(last, "content"):
+            ai_msg = getattr(last, "content", "") or ""
+        elif isinstance(last, dict) and "content" in last:
+            ai_msg = str(last.get("content") or "")
+        else:
+            ai_msg = str(last)
 
     # Persistir historial si hay user_id
     if req.user_id:
-        new_history = base_history + [ChatTurn(role="user", content=req.message), ChatTurn(role="assistant", content=ai_msg)]
+        new_history = base_history + [
+            ChatTurn(role="user", content=req.message),
+            ChatTurn(role="assistant", content=ai_msg),
+        ]
         save_history(req.user_id, new_history)
 
     return {"reply": ai_msg, "remembered_name": profile.get("name")}
